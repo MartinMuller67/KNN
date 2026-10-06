@@ -39,100 +39,118 @@ first project's correction attempt did?
 4. Repeats this across 6 rolling walk-forward windows on real AAXJ
    data (2016–2024), with transaction costs included.
 5. Compares vanilla KNN (uniform weighting) against DWKNN
-   (distance-weighted) using the same generalisation ratio and
-   mean/median methodology as the first project.
+   (distance-weighted) using a generalisation ratio (mean daily net
+   return, test / validation) and the same mean/median methodology as
+   the first project.
 
 ## What I found
 
-### This time, the correction actually worked
+> **Corrections (October 2026).** An earlier version of this project
+> reported much stronger results for DWKNN (median ratio 1.11, training
+> Sharpe 9.92). While re-checking my own code, I found two bugs, both
+> described in [Corrections](#corrections) below. All figures on this
+> page come from the corrected script.
 
-Unlike my first project — where averaging the top-5 parameter
-combinations made things worse, not better — here the theoretically
-motivated fix (distance weighting) genuinely improved generalisation:
+### Distance weighting helped, but only partially
 
-| | Mean | Median | Std dev | Negative windows |
+Unlike my first project, where averaging the top-5 parameter
+combinations made things worse, here the theoretically motivated fix
+(distance weighting) did improve generalisation. It did not remove the
+overfitting.
+
+| | Mean | Median | Std dev | Loss-making test windows |
 |---|---|---|---|---|
-| Vanilla KNN | -0.13 | -0.21 | 1.08 | 4/6 |
-| **DWKNN** | 1.33 | **1.11** | 2.88 | 3/6 |
+| Vanilla KNN | -0.02 | 0.13 | 0.43 | 4/6 |
+| **DWKNN** | 0.46 | **0.48** | 0.97 | 3/6 |
 
-The DWKNN's median generalisation ratio (1.11) sits essentially at — or
-slightly above — the "perfect generalisation" line. Vanilla KNN's
-median stays clearly negative.
+The ratio compares mean daily net returns, test over validation, so 1.0
+means the validation performance carried over unchanged. Vanilla KNN
+keeps only about an eighth of it out of sample. DWKNN keeps about half.
+Both selected values of k are therefore overfit to the validation slice;
+distance weighting reduces the damage, it does not prevent it.
 
-I checked whether this DWKNN result was itself outlier-driven, the same
-way the naive MA crossover method was in my first project. It is: window
-6's ratio (6.70) pulls the DWKNN mean from 0.25 (without that window) up
-to 1.33 (with it) — a distortion of the same kind, and roughly the same
-size, as the one I found before. The median, however, barely moves
-(1.03 without window 6 vs. 1.11 with it), which is exactly why I trust
-it more than the mean here. This is a useful confirmation of the
-lesson from my first project: it's not that DWKNN "produces no
-outliers" — it's that the median is the right statistic to read
-regardless of which method you're evaluating.
+I checked whether the DWKNN result was itself outlier-driven, the same
+way the naive MA crossover method was in my first project. Window 6's
+ratio (2.14) pulls the DWKNN mean from 0.12 (without that window) up to
+0.46 (with it). The median barely moves (0.47 without window 6 vs. 0.48
+with it), which is why I read the median rather than the mean, whichever
+method I am evaluating.
 
 ![KNN generalisation ratio results](knn_overfitting.png)
 
-### An important caveat: a ratio above 1 isn't automatically good news
+### A positive ratio isn't automatically good news
 
-While checking these results, I noticed something worth flagging
-explicitly. Window 5's DWKNN generalisation ratio is **1.39** — which
-looks great at first glance — but both the training return (-8.9%) and
+In window 5, both models show a positive ratio (0.31 for vanilla KNN,
+0.49 for DWKNN), but for DWKNN both the validation return (-8.9%) and
 the test return (-12.4%) were *negative*. Dividing two negative numbers
 gives a positive ratio, even though the strategy lost money on both
-sides. A generalisation ratio has to be read together with the sign and
-magnitude of the underlying returns, never in isolation — otherwise a
-losing strategy can masquerade as "well-generalised."
+sides. These windows are hatched on the chart. A generalisation ratio
+has to be read together with the sign of the underlying returns, never
+in isolation.
 
 ### A necessary caveat on sample size
 
-With only 6 walk-forward windows — even fewer than the 7 in my first
-project — any conclusion here is fragile. One extra or missing window
-could shift both the mean and, to a lesser extent, the median. I'd
-treat this result as a genuine, honestly-obtained signal that DWKNN
-generalises better here, not as a statistically robust proof.
+With only 6 walk-forward windows, even fewer than the 7 in my first
+project, any conclusion here is fragile. One extra or missing window
+could shift both the mean and, to a lesser extent, the median. I treat
+this result as an honestly obtained signal that DWKNN generalises better
+here, not as a statistically robust proof.
 
 ### Ratio vs. Sharpe: two different questions, two different answers
 
-The generalisation ratio answers "did performance carry over proportionally
-from training to test?" It doesn't answer "was the out-of-sample
-performance actually any good?" I computed Sharpe ratios to check the
-second question directly.
+The generalisation ratio answers "did performance carry over from
+validation to test?" It doesn't answer "was the out-of-sample
+performance actually any good?" I computed annualised Sharpe ratios,
+net of costs and of a 2.5% risk-free rate, to check the second question.
 
-| | Train Sharpe (mean) | Test Sharpe (mean) | Positive test-Sharpe windows |
+| | In-sample Sharpe (mean) | Test Sharpe (mean) | Positive test-Sharpe windows |
 |---|---|---|---|
-| Vanilla KNN | 1.69 | -0.58 | 0/6 |
-| DWKNN | **9.92** | -0.35 | 3/6 |
+| Vanilla KNN | 0.90 | -0.58 | 0/6 |
+| DWKNN | 0.89 | -0.35 | 3/6 |
 
-DWKNN's training Sharpe is absurdly high — individual windows reach
-8 to 11, a level no real strategy sustains — which is itself a clear
-overfitting signature, just visible through a different lens than the
-generalisation ratio. And despite DWKNN's median generalisation ratio
-looking close to "perfect" (1.11), its **out-of-sample Sharpe is still
-negative on average** (-0.35). Vanilla KNN is worse still: negative
-test Sharpe in every single window.
+Both models look reasonable in-sample and turn negative out of sample.
+Vanilla KNN's test Sharpe is negative in every window; in two of them
+(windows 2 and 6) the strategy still made a small profit, but not enough
+to beat the risk-free rate. DWKNN turns risk-adjusted-positive in 3 of
+6 windows, but its average test Sharpe is still negative (-0.35).
 
-The honest conclusion: DWKNN is a real improvement over vanilla KNN —
-less bad training-set overfitting, and 3 out of 6 windows turn
-risk-adjusted-positive out-of-sample instead of zero — but it has not
-been "solved." A generalisation ratio near 1 means the model's
-(mediocre) performance carried over consistently, not that the
-strategy is genuinely profitable out-of-sample. Ratio and Sharpe are
-answering different questions, and a project should check both before
-declaring a fix successful.
+The honest conclusion: DWKNN is a real improvement over vanilla KNN,
+but it has not been "solved". Ratio and Sharpe answer different
+questions, and a project should check both before declaring a fix
+successful.
 
-### Contrast with the first project — and why that's a good thing
+### Corrections
 
-The headline finding here is almost the mirror image of my first
-project's conclusion, with a caveat the Sharpe check above adds: a
-theoretically motivated fix (distance weighting) measurably improved
-things here, while a more ad-hoc one (parameter averaging) didn't work
-in the first project — but "improved" is not the same as "solved," as
-the negative average test Sharpe shows. I think that contrast, and the
-discipline of checking both the ratio and the Sharpe rather than
-stopping at the first flattering number, is the most useful part of
-doing both projects rather than just one: it shows I'm not assuming
-corrections work (or don't), and I don't stop checking once I get an
-answer I like.
+Two bugs in the first version of the script inflated the DWKNN results.
+
+1. **Look-ahead in the in-sample Sharpe.** The model was refit on the
+   full training window, then evaluated on the last 20% of that same
+   window, i.e. on points it had already seen. Each point was its own
+   nearest neighbour at distance zero, so with distance weighting the
+   prediction was exactly the true next-day return. That produced the
+   "absurd" training Sharpe of 9.92 that I had read as an overfitting
+   signature: it was a bug, not overfitting. The in-sample Sharpe is
+   now computed on the validation series actually used to select k
+   (DWKNN: 0.89).
+2. **Horizon mismatch in the generalisation ratio.** The ratio divided a
+   cumulative return over 250 test days by a cumulative return over 100
+   validation days, so identical daily performance gave a ratio of
+   about 2.5, not 1. The ratio now compares mean daily net returns.
+
+Fixing them brought the DWKNN median ratio down from 1.11 to 0.48 and
+the vanilla median from -0.21 to 0.13. The test Sharpe ratios and the
+count of loss-making windows were not affected.
+
+### Contrast with the first project
+
+A theoretically motivated fix (distance weighting) measurably improved
+things here, while a more ad hoc one (parameter averaging) did not work
+in my first project. But "improved" is not the same as "solved", as the
+negative average test Sharpe shows. The other lesson is about my own
+process: the first version of this project reported a flattering
+result that came partly from my own bugs. Checking the ratio and the
+Sharpe, the median and the mean, and finally my own code, is the most
+useful habit I took from doing both projects.
 
 ## Methodology notes
 
@@ -148,6 +166,10 @@ answer I like.
   (which trivially favours the smallest possible k).
 - k grid tested: 3, 5, 7, 10, 15, 20, 30, 40, 50.
 - Transaction costs: 10 bps charged on every position change.
+- Generalisation ratio: mean daily net return on the test window divided
+  by mean daily net return on the validation slice used to select k.
+- Sharpe ratios: annualised (252 days), net of costs, with a 2.5%
+  risk-free rate.
 - Strategy: long-only, no shorting.
 
 ## What I'd extend next
