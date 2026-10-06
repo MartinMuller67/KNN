@@ -147,26 +147,44 @@ def run_walk_forward(windows, weights, cost):
         split = int(len(train) * 0.8)
         sub_train, sub_val = train.iloc[:split], train.iloc[split:]
 
-        best_k, best_val_ret = None, -np.inf
+        best_k, best_val_ret, best_val_series = None, -np.inf, None
         for k in K_GRID:
-            ret, _ = backtest_knn(sub_train, sub_val, k, weights, cost=cost)
+            ret, series = backtest_knn(sub_train, sub_val, k, weights, cost=cost)
             if ret > best_val_ret:
-                best_val_ret, best_k = ret, k
+                best_val_ret, best_k, best_val_series = ret, k, series
 
         # refit on the FULL training window with the selected k, then
         # test on the genuinely unseen out-of-sample window
-        train_ret, train_returns_series = backtest_knn(train, train.iloc[split:], best_k, weights, cost=cost)
-        test_ret, test_returns_series = backtest_knn(train, test, best_k, weights, cost=cost)
-        gen_ratio = test_ret / best_val_ret if best_val_ret != 0 else np.nan
+        test_ret, test_series = backtest_knn(train, test, best_k, weights, cost=cost)
+
+        # FIX 1 (look-ahead in the "train" Sharpe): the previous version
+        # refit on the full training window and then predicted on
+        # train.iloc[split:], i.e. on points the model had already seen.
+        # Each point was its own nearest neighbour at distance 0, so with
+        # weights="distance" the prediction was the true next-day return
+        # (perfect foresight). The in-sample Sharpe is now computed on the
+        # validation series that was actually used to select k.
+        #
+        # FIX 2 (horizon mismatch in the generalisation ratio): the
+        # previous ratio divided a 250-day cumulative test return by a
+        # 100-day cumulative validation return, so identical daily
+        # performance gave a ratio of ~2.5, not 1. The ratio now compares
+        # mean daily net returns, so 1.0 really means "same performance".
+        val_mean = np.mean(best_val_series)
+        test_mean = np.mean(test_series)
+        gen_ratio = test_mean / val_mean if val_mean != 0 else np.nan
 
         records.append({
             "window": w_idx + 1,
             "best_k": best_k,
-            "train_return": best_val_ret,
-            "test_return": test_ret,
+            "val_return": best_val_ret,          # cumulative, 100 days
+            "test_return": test_ret,             # cumulative, 250 days
+            "val_mean_daily": val_mean,
+            "test_mean_daily": test_mean,
             "gen_ratio": gen_ratio,
-            "train_sharpe": sharpe_ratio(train_returns_series),
-            "test_sharpe": sharpe_ratio(test_returns_series),
+            "both_negative": (val_mean < 0) and (test_mean < 0),
+            "train_sharpe": sharpe_ratio(best_val_series),
+            "test_sharpe": sharpe_ratio(test_series),
         })
     return pd.DataFrame(records)
 
@@ -188,15 +206,26 @@ print(f"DWKNN        - mean gen ratio: {results_distance['gen_ratio'].mean():.3f
       f"std: {results_distance['gen_ratio'].std():.3f}")
 
 print("\n--- Sharpe ratios (annualised, per-window average) ---")
-print(f"Vanilla KNN  - train Sharpe: {results_uniform['train_sharpe'].mean():.2f}, "
+print(f"Vanilla KNN  - validation Sharpe: {results_uniform['train_sharpe'].mean():.2f}, "
       f"test Sharpe: {results_uniform['test_sharpe'].mean():.2f}")
-print(f"DWKNN        - train Sharpe: {results_distance['train_sharpe'].mean():.2f}, "
+print(f"DWKNN        - validation Sharpe: {results_distance['train_sharpe'].mean():.2f}, "
       f"test Sharpe: {results_distance['test_sharpe'].mean():.2f}")
 print("\nPer-window Sharpe detail:")
 print("Vanilla:")
 print(results_uniform[["window", "train_sharpe", "test_sharpe"]].to_string(index=False))
 print("DWKNN:")
 print(results_distance[["window", "train_sharpe", "test_sharpe"]].to_string(index=False))
+
+print("\nPer-window daily mean returns (validation vs test):")
+for name, res in [("Vanilla", results_uniform), ("DWKNN", results_distance)]:
+    print(name)
+    print(res[["window", "val_mean_daily", "test_mean_daily", "gen_ratio", "both_negative"]].to_string(index=False))
+
+for name, res in [("Vanilla KNN", results_uniform), ("DWKNN", results_distance)]:
+    n_pos_sharpe = (res["test_sharpe"] > 0).sum()
+    n_misleading = res["both_negative"].sum()
+    print(f"{name}: positive test-Sharpe windows {n_pos_sharpe}/{len(res)}, "
+          f"positive ratio but loss-making (both negative) {n_misleading}/{len(res)}")
 
 n_neg_uniform = (results_uniform["test_return"] < 0).sum()
 n_neg_distance = (results_distance["test_return"] < 0).sum()
@@ -213,14 +242,23 @@ fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
 
 x = results_uniform["window"]
 width = 0.35
-axes[0].bar(x - width/2, results_uniform["gen_ratio"], width, label="Vanilla KNN (uniform)", color="#E74C3C")
-axes[0].bar(x + width/2, results_distance["gen_ratio"], width, label="DWKNN (distance-weighted)", color="#27AE60")
+bars_u = axes[0].bar(x - width/2, results_uniform["gen_ratio"], width, label="Vanilla KNN (uniform)", color="#E74C3C")
+bars_d = axes[0].bar(x + width/2, results_distance["gen_ratio"], width, label="DWKNN (distance-weighted)", color="#27AE60")
+for bars, res in [(bars_u, results_uniform), (bars_d, results_distance)]:
+    for bar, flag in zip(bars, res["both_negative"]):
+        if flag:
+            bar.set_hatch("///")
+            bar.set_edgecolor("black")
+from matplotlib.patches import Patch
+handles, labels = axes[0].get_legend_handles_labels()
+handles.append(Patch(facecolor="white", edgecolor="black", hatch="///"))
+labels.append("Positive ratio, but loss-making\n(validation & test returns negative)")
 axes[0].axhline(1.0, color="black", linestyle="--", linewidth=1, label="Perfect generalisation")
 axes[0].axhline(0.0, color="grey", linewidth=0.8)
 axes[0].set_xlabel("Walk-forward window")
-axes[0].set_ylabel("Generalisation ratio")
+axes[0].set_ylabel("Generalisation ratio (mean daily return, test / validation)")
 axes[0].set_title("KNN Generalisation Ratio per Window")
-axes[0].legend()
+axes[0].legend(handles, labels)
 axes[0].set_xticks(x)
 
 methods = ["Vanilla KNN\nmedian", "DWKNN\nmedian"]
